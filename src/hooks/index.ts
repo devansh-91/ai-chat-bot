@@ -33,7 +33,7 @@ import {
 import { CLOUD_ENABLED, LATENCY_TARGET_MS, RETENTION_DAYS } from '../core/config'
 import { db, type LocalConversation, type LocalMessage } from '../core/db'
 import { MODEL_CATALOG, ollamaSpec } from '../core/llm/catalog'
-import { getSelectedModelKey, loadModel, modelState } from '../core/llm/engine'
+import { ensureModel, getSelectedModelKey, loadModel, modelState } from '../core/llm/engine'
 import { listOllamaModels } from '../core/llm/ollama'
 import type { ModelSpec } from '../core/llm/types'
 import { PERSONAS } from '../core/personas'
@@ -131,9 +131,15 @@ export function useChat(conversationId: string | null) {
   const { autoSpeak } = useStore(voiceSettings)
   const partial = conversationId ? stream.partial[conversationId] : undefined
 
+  /**
+   * Sends a message. If no model is loaded yet, the default one (last used, else the device's
+   * recommendation) is downloaded/loaded first; progress is visible via useModel().
+   * Rejects if the model cannot be loaded, so the UI can restore the draft.
+   */
   const send = useCallback(
     async (text: string) => {
-      if (!conversationId) return null
+      if (!conversationId || !text.trim()) return null
+      await ensureModel()
       const speaker = autoSpeak ? createStreamingSpeaker() : null
       const msg = await sendMessage(conversationId, text, speaker ? (d) => speaker.push(d) : undefined, { spoken: autoSpeak })
       speaker?.end()

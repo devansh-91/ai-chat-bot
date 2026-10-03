@@ -4,7 +4,7 @@ export function ModelPicker() {
   const m = useModel()
   const current = m.spec?.key ?? m.lastUsedKey ?? m.recommendedKey ?? ''
   return (
-    <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+    <span className="model-picker">
       <select
         value={current}
         disabled={m.status === 'loading'}

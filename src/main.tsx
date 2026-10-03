@@ -6,6 +6,7 @@ import { initAuth } from './core/auth'
 import { getSelectedModelKey, initDevice, loadModel } from './core/llm/engine'
 import { startLocalPurgeSchedule } from './core/privacy'
 import App from './ui/App'
+import { ErrorBoundary } from './ui/ErrorBoundary'
 import './ui/base.css'
 
 registerSW({ immediate: true })
@@ -20,8 +21,10 @@ void navigator.storage?.persist?.()
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>
-    <BrowserRouter basename={import.meta.env.BASE_URL}>
-      <App />
-    </BrowserRouter>
+    <ErrorBoundary>
+      <BrowserRouter basename={import.meta.env.BASE_URL}>
+        <App />
+      </BrowserRouter>
+    </ErrorBoundary>
   </StrictMode>,
 )

@@ -4,13 +4,17 @@
 body { margin: 0; }
 .app { display: grid; grid-template-columns: 260px 1fr; height: 100dvh; }
 .sidebar { border-right: 1px solid #8884; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
-.main { display: flex; flex-direction: column; min-width: 0; }
+.main { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; }
 .topbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #8884; }
-.messages { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.messages { flex: 1; min-height: 0; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
 .msg { white-space: pre-wrap; padding: 8px 10px; border-radius: 8px; max-width: 80ch; }
 .msg.user { align-self: flex-end; background: #8882; }
 .meta { font-size: 12px; color: var(--muted); }
-.composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #8884; }
+.composer { display: flex; gap: 8px; padding: 12px; padding-bottom: max(12px, env(safe-area-inset-bottom)); border-top: 1px solid #8884; }
+.composer button { flex-shrink: 0; }
+.notice { border: 1px solid #8886; border-radius: 8px; padding: 12px; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.model-picker { display: inline-flex; flex-wrap: wrap; gap: 6px; align-items: center; max-width: 100%; }
+.model-picker select { max-width: min(100%, 320px); }
 .composer textarea { flex: 1; resize: none; font: inherit; padding: 8px; }
 .pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid #8886; }
 .ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }

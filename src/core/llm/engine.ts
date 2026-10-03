@@ -89,6 +89,31 @@ export async function loadModel(key: string): Promise<void> {
   }
 }
 
+/** The model a send should use when none is loaded: current, then last used, then the device's recommendation. */
+export async function defaultModelKey(): Promise<string> {
+  const s = modelState.get()
+  return s.spec?.key ?? getSelectedModelKey() ?? (s.device ?? (await initDevice())).recommendedModelKey
+}
+
+/** Resolves once a model is ready, loading the default one if needed (waits for an in-flight load). */
+export async function ensureModel(): Promise<void> {
+  const s = modelState.get()
+  if (s.status === 'ready') return
+  if (s.status === 'loading') {
+    await new Promise<void>((resolve, reject) => {
+      const unsub = modelState.subscribe(() => {
+        const { status, error } = modelState.get()
+        if (status === 'loading') return
+        unsub()
+        if (status === 'ready') resolve()
+        else reject(new Error(error ?? 'Model failed to load'))
+      })
+    })
+    return
+  }
+  await loadModel(await defaultModelKey())
+}
+
 export interface TimedResult {
   text: string
   metrics: TurnMetrics
