@@ -26,23 +26,34 @@ async function signedIn(email: string) {
   return sb
 }
 
-/** Resolves with the realtime rows a client receives on activity_events during `ms`. */
-function listen(sb: SupabaseClient, ms: number, ready: () => void): Promise<unknown[]> {
-  return new Promise((resolve, reject) => {
-    const got: unknown[] = []
-    const ch = sb
-      .channel(`t-${crypto.randomUUID()}`)
-      .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_events' }, (p) => got.push(p.new))
-      .subscribe((status) => {
-        if (status === 'SUBSCRIBED') {
-          ready()
-          setTimeout(() => {
-            void sb.removeChannel(ch)
-            resolve(got)
-          }, ms)
-        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reject(new Error(status))
-      })
-  })
+/** Collects realtime activity_events inserts this client is allowed to receive. */
+async function collector(sb: SupabaseClient) {
+  const rows: { user_id: string; kind: string }[] = []
+  const ch = sb.channel(`t-${crypto.randomUUID()}`).on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_events' }, (p) =>
+    rows.push(p.new as { user_id: string; kind: string }),
+  )
+  await new Promise<void>((resolve, reject) =>
+    ch.subscribe((status) => {
+      if (status === 'SUBSCRIBED') resolve()
+      else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') reject(new Error(status))
+    }),
+  )
+  return { rows, close: () => sb.removeChannel(ch) }
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+/**
+ * A freshly started Realtime reports SUBSCRIBED before its database replication is streaming.
+ * Insert probe events until the admin actually receives one.
+ */
+async function waitUntilStreaming(admin: { rows: { user_id: string }[] }, adminId: string) {
+  for (let i = 0; i < 30; i++) {
+    await service.from('activity_events').insert({ user_id: adminId, client_id: crypto.randomUUID(), kind: 'page_view', meta: { probe: true } })
+    await sleep(1000)
+    if (admin.rows.some((r) => r.user_id === adminId)) return
+  }
+  throw new Error('realtime never started streaming')
 }
 
 beforeAll(async () => {
@@ -78,14 +89,9 @@ describe('admin activity monitor', () => {
       { clientId: crypto.randomUUID(), ownerId: ids.user, kind: 'reply', meta: { model: 'qwen', ttft_ms: 420, total_ms: 1500 }, deviceKind: 'mobile', createdAt: Date.now() - 4000 },
     ])
 
-    let readyCount = 0
-    let onReady!: () => void
-    const bothReady = new Promise<void>((r) => (onReady = r))
-    const ready = () => ++readyCount === 2 && onReady()
-    const adminGot = listen(admin, 4000, ready)
-    const snoopGot = listen(snoop, 4000, ready)
-    await bothReady
-    await new Promise((r) => setTimeout(r, 500))
+    const adminRx = await collector(admin)
+    const snoopRx = await collector(snoop)
+    await waitUntilStreaming(adminRx, ids.admin)
 
     await new SyncEngine(user, ids.user, local).run()
     expect(syncState.get().error ?? syncState.get().phase).toBe('idle')
@@ -96,9 +102,12 @@ describe('admin activity monitor', () => {
       .upsert({ user_id: ids.user, status: 'generating', page: '/c/:id', model: 'qwen', device_kind: 'mobile' }, { onConflict: 'user_id' })
     expect(pErr).toBeNull()
 
-    const [a, s] = await Promise.all([adminGot, snoopGot])
-    expect(a.length).toBe(2)
-    expect(s.length).toBe(0)
+    for (let i = 0; i < 20 && adminRx.rows.filter((r) => r.user_id === ids.user).length < 2; i++) await sleep(250)
+    await sleep(1000) // give the non-admin's channel time to (wrongly) receive anything
+    expect(adminRx.rows.filter((r) => r.user_id === ids.user).map((r) => r.kind).sort()).toEqual(['message_sent', 'reply'])
+    expect(snoopRx.rows).toEqual([])
+    await adminRx.close()
+    await snoopRx.close()
 
     const { data: live } = await admin.rpc('admin_live_users')
     const me = (live as { user_id: string; status: string; online: boolean }[]).find((u) => u.user_id === ids.user)
