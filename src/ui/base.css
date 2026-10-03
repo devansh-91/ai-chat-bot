@@ -1,0 +1,21 @@
+/* Placeholder styling only: the real design replaces everything in src/ui/. */
+:root { color-scheme: light dark; font-family: system-ui, sans-serif; --muted: #888; --ok: #1a7f37; --warn: #b26b00; --bad: #c62828; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+.app { display: grid; grid-template-columns: 260px 1fr; height: 100dvh; }
+.sidebar { border-right: 1px solid #8884; padding: 12px; overflow: auto; display: flex; flex-direction: column; gap: 8px; }
+.main { display: flex; flex-direction: column; min-width: 0; }
+.topbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; padding: 8px 12px; border-bottom: 1px solid #8884; }
+.messages { flex: 1; overflow: auto; padding: 12px; display: flex; flex-direction: column; gap: 10px; }
+.msg { white-space: pre-wrap; padding: 8px 10px; border-radius: 8px; max-width: 80ch; }
+.msg.user { align-self: flex-end; background: #8882; }
+.meta { font-size: 12px; color: var(--muted); }
+.composer { display: flex; gap: 8px; padding: 12px; border-top: 1px solid #8884; }
+.composer textarea { flex: 1; resize: none; font: inherit; padding: 8px; }
+.pill { font-size: 12px; padding: 2px 8px; border-radius: 99px; border: 1px solid #8886; }
+.ok { color: var(--ok); } .warn { color: var(--warn); } .bad { color: var(--bad); }
+.conv { text-align: left; padding: 6px 8px; border: 0; background: none; cursor: pointer; border-radius: 6px; font: inherit; color: inherit; }
+.conv.active { background: #8883; }
+table { border-collapse: collapse; } td, th { padding: 4px 8px; border-bottom: 1px solid #8884; text-align: left; }
+.page { padding: 16px; overflow: auto; }
+@media (max-width: 700px) { .app { grid-template-columns: 1fr; } .sidebar { display: none; } .app.show-sidebar .sidebar { display: flex; } }

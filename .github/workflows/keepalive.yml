@@ -1,0 +1,15 @@
+# Supabase pauses free projects after 7 days without activity. A tiny read every 3 days prevents that.
+name: Keep Supabase awake
+on:
+  schedule:
+    - cron: '0 6 */3 * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    if: ${{ vars.VITE_SUPABASE_URL != '' }}
+    steps:
+      - run: |
+          curl -fsS "${{ vars.VITE_SUPABASE_URL }}/rest/v1/profiles?select=id&limit=1" \
+            -H "apikey: ${{ vars.VITE_SUPABASE_ANON_KEY }}" -o /dev/null
