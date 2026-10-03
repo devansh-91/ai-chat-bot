@@ -61,6 +61,15 @@ picks the largest model the device can run.
   still shows up later.
 - Admins get both tables through Postgres realtime, which delivers rows only to subscribers who pass RLS.
 
+**Speed on CPU (multi-threading).** wllama runs llama.cpp on all CPU cores only when the page is
+cross-origin isolated (SharedArrayBuffer). GitHub Pages can't send the COOP/COEP headers that requires, so
+`public/coi.js` (imported into the service worker) adds `Cross-Origin-Opener-Policy: same-origin` and
+`Cross-Origin-Embedder-Policy: credentialless` to page and worker responses. `credentialless` keeps model
+downloads and Supabase working without changes on their side. The page reloads itself once when the service
+worker first takes control. Measured on a 12-core laptop (Qwen2.5-0.5B, CPU): 3.7 → 16.5 tokens/s, and time to
+first word 3.9 s → 0.8 s. Safari doesn't support `credentialless` and stays single-threaded. Prompt caching
+(`cache_prompt`) means each new message in a long chat only processes the new text.
+
 **15-day lifecycle.**
 - Server: `pg_cron` runs `purge_expired()` hourly.
 - Device: `purgeLocal()` runs on startup and hourly.

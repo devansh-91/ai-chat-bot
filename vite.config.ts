@@ -34,6 +34,8 @@ export default defineConfig({
         globPatterns: ['**/*.{js,css,html,svg,png}'],
         globIgnores: ['**/webllm*', '**/wllama*', '**/whisper*', '**/ort-*', '**/transformers*'],
         navigateFallback: `${base}index.html`,
+        // Adds COOP/COEP headers so multi-threaded WASM works on hosts that can't set headers.
+        importScripts: ['coi.js'],
         runtimeCaching: [
           {
             urlPattern: ({ url, sameOrigin }) => sameOrigin && url.pathname.includes('/assets/'),

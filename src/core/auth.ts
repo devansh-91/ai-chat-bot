@@ -4,6 +4,7 @@ import { GUEST_OWNER } from './config'
 import { createStore } from './store'
 import { supabase } from './supabase'
 import { claimGuestData, SyncEngine, wipeUserData } from './sync'
+import { claimGuestTabs } from './tabs'
 
 export type AppRole = 'user' | 'admin'
 
@@ -89,6 +90,7 @@ async function applySession(session: Session | null, event: AuthChangeEvent | 'R
   }))
   if (!sameUser || !engine) {
     await claimGuestData(GUEST_OWNER, user.id)
+    await claimGuestTabs(GUEST_OWNER, user.id)
     activityContext.ownerId = user.id
     engine?.stop()
     engine = new SyncEngine(sb, user.id)

@@ -152,6 +152,7 @@ export async function wipeUserData(userId: string, database: LocalDB = db): Prom
     await database.activity.where('ownerId').equals(userId).delete()
     await database.kv.delete(`cursor:conversations:${userId}`)
     await database.kv.delete(`cursor:messages:${userId}`)
+    await database.kv.delete(`tabs:${userId}`)
   })
 }
 

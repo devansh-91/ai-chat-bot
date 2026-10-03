@@ -24,6 +24,8 @@ import { authState, signInWithGoogle, signOut } from '../core/auth'
 import {
   createConversation,
   deleteConversation,
+  generateReply,
+  needsReply,
   renameConversation,
   sendMessage,
   setConversationPersona,
@@ -33,7 +35,8 @@ import {
 import { CLOUD_ENABLED, LATENCY_TARGET_MS, RETENTION_DAYS } from '../core/config'
 import { db, type LocalConversation, type LocalMessage } from '../core/db'
 import { MODEL_CATALOG, ollamaSpec } from '../core/llm/catalog'
-import { ensureModel, getSelectedModelKey, loadModel, modelState } from '../core/llm/engine'
+import { getSelectedModelKey, loadModel, modelState } from '../core/llm/engine'
+import { closeTab, openTab, reconcileTabs, type TabsState } from '../core/tabs'
 import { listOllamaModels } from '../core/llm/ollama'
 import type { ModelSpec } from '../core/llm/types'
 import { PERSONAS } from '../core/personas'
@@ -132,14 +135,12 @@ export function useChat(conversationId: string | null) {
   const partial = conversationId ? stream.partial[conversationId] : undefined
 
   /**
-   * Sends a message. If no model is loaded yet, the default one (last used, else the device's
-   * recommendation) is downloaded/loaded first; progress is visible via useModel().
-   * Rejects if the model cannot be loaded, so the UI can restore the draft.
+   * Sends a message. The user's message appears immediately; if no model is loaded yet, the
+   * default one (last used, else the device's recommendation) loads first, with progress in useModel().
    */
   const send = useCallback(
     async (text: string) => {
       if (!conversationId || !text.trim()) return null
-      await ensureModel()
       const speaker = autoSpeak ? createStreamingSpeaker() : null
       const msg = await sendMessage(conversationId, text, speaker ? (d) => speaker.push(d) : undefined, { spoken: autoSpeak })
       speaker?.end()
@@ -148,9 +149,17 @@ export function useChat(conversationId: string | null) {
     [conversationId, autoSpeak],
   )
 
+  const last = messages?.at(-1)
   return {
     conversation: conversation ?? null,
     messages: messages ?? [],
+    /** Last message is the user's with no reply (model failed to load, error, or app was closed). */
+    canRetry: partial === undefined && last?.role === 'user',
+    /** Generate a reply to the last message again. */
+    retry: async () => {
+      if (!conversationId || !(await needsReply(conversationId))) return null
+      return generateReply(conversationId)
+    },
     /** Assistant text streamed so far (undefined when not generating). */
     streamingText: partial,
     isGenerating: partial !== undefined,
@@ -371,5 +380,35 @@ export function useLiveActivity({ windowHours = 24, userId = null, kind = null, 
     live,
     error,
     reload: () => setTick((t) => t + 1),
+  }
+}
+
+// ───────────── tabs ─────────────
+/**
+ * Open chat tabs for the current account, remembered across reloads (IndexedDB). Tabs of chats that
+ * were deleted or auto-purged after 15 days disappear by themselves.
+ */
+export function useTabs() {
+  const { user } = useStore(authState)
+  const ownerId = user?.id ?? 'guest'
+  const stored = useLiveQuery(async () => (await db.kv.get(`tabs:${ownerId}`))?.value as TabsState | undefined, [ownerId])
+  const convs = useLiveQuery(
+    () => db.conversations.where('ownerId').equals(ownerId).filter((c) => c.deletedAt == null).toArray(),
+    [ownerId],
+  )
+  const byId = useMemo(() => new Map((convs ?? []).map((c) => [c.id, c])), [convs])
+  const state = reconcileTabs(stored ?? { open: [], active: null }, new Set(byId.keys()))
+  return {
+    loading: stored === undefined && convs === undefined,
+    tabs: state.open.map((id) => byId.get(id)!),
+    activeId: state.active,
+    open: (id: string) => openTab(ownerId, id),
+    close: (id: string) => closeTab(ownerId, id),
+    /** Creates a new chat and opens it in a new tab. Returns its id. */
+    newTab: async (persona?: string) => {
+      const id = await createConversation(persona)
+      await openTab(ownerId, id)
+      return id
+    },
   }
 }

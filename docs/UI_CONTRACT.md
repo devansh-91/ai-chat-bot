@@ -6,7 +6,8 @@ voice and security keep working.
 
 ## Screens to design
 
-1. **Chat:** sidebar of conversations, message list, composer (text, mic, send/stop), persona switch.
+1. **Chat:** tab strip of open chats, history drawer (all chats, "deletes in N days"), message list, composer
+   (text, mic, send/stop). Keep the top bar minimal and put details (model, speed, persona, account) behind a toggle.
 2. **Model picker / first-run:** pick or download a model, with progress and a device-tier badge.
 3. **Telemetry HUD:** a small always-visible widget (TTFT, tokens/sec, p50, % under 800 ms).
 4. **Settings:** voice (voice list, pitch, rate, auto-read, test), Ollama URL, privacy info.
@@ -41,6 +42,11 @@ Design for **phone first**: the same app is installed on phones.
 | `isGenerating`, `error` | |
 | `send(text)`, `stop()` | if auto-read is on, `send` speaks the reply as it streams |
 
+| `canRetry`, `retry()` | the last message is the user's with no reply (model failed to load, error, app closed mid-reply): show a "Try again" button |
+
+The user's message is added (and visible) **immediately** on `send`. If no model is loaded, the default one loads
+first: show `useModel().progress` while `isGenerating && model.status === 'loading'`.
+
 `metrics` on assistant messages: `{ provider, model, ttftMs, totalMs, outputTokens, tokensPerSec }`.
 
 ### `useModel()`
@@ -50,6 +56,12 @@ Design for **phone first**: the same app is installed on phones.
 
 Each spec has `{ key, label, provider, downloadMB, contextTokens }`. On a first visit, show a "download
 the recommended model (~1 GB, once)" step, since phones may be on mobile data.
+
+### `useTabs()`
+Open chats as tabs, remembered on the device per account (survive reloads; a tab disappears when its chat is
+deleted or auto-purged after 15 days; closing a tab only hides it, the chat stays in history).
+`tabs[]` (conversations, in tab order), `activeId`, `open(id)`, `close(id) → { open, active }` (navigate to the
+returned `active`), `newTab(persona?) → id`. Max 12 tabs; the oldest drop off.
 
 ### `useTelemetryHud()`
 `last` (most recent turn), `samples[]` (up to 100), `stats` (`ttftP50`, `ttftP95`, `totalP50`,

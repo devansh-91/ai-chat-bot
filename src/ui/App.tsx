@@ -1,114 +1,197 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
-import { useAuth, useConversations, useOnline, usePageReporting, useSyncStatus } from '../hooks'
+import { useAuth, useConversations, useModel, useOnline, usePageReporting, useSyncStatus, useTabs } from '../hooks'
 import { AdminPage } from './AdminPage'
 import { ChatView } from './ChatView'
-import { ModelPicker } from './ModelPicker'
+import { DetailsPanel } from './DetailsPanel'
 import { SettingsPage } from './SettingsPage'
-import { TelemetryHud } from './TelemetryHud'
 
 /**
- * PLACEHOLDER UI. Functional but intentionally plain: it exists to prove every feature works
- * end-to-end. Replace anything in src/ui/ freely; all behavior lives behind src/hooks.
+ * PLACEHOLDER UI. Functional and tidy, but meant to be replaced by the final design.
+ * All behavior lives behind src/hooks.
  */
 export default function App() {
-  const [showSidebar, setShowSidebar] = useState(false)
+  const [drawer, setDrawer] = useState(false)
+  const [details, setDetails] = useState(() => {
+    try {
+      return localStorage.getItem('shreyan.details') === '1'
+    } catch {
+      return false
+    }
+  })
+  useEffect(() => {
+    try {
+      localStorage.setItem('shreyan.details', details ? '1' : '0')
+    } catch {
+      // preference just won't persist
+    }
+  }, [details])
   usePageReporting(useLocation().pathname)
+
   return (
-    <div className={`app ${showSidebar ? 'show-sidebar' : ''}`}>
-      <Sidebar onNavigate={() => setShowSidebar(false)} />
-      <div className="main">
-        <TopBar onMenu={() => setShowSidebar((v) => !v)} />
-        <Routes>
-          <Route path="/" element={<Home />} />
-          <Route path="/c/:id" element={<ChatRoute />} />
-          <Route path="/settings" element={<SettingsPage />} />
-          <Route path="/admin" element={<AdminGuard />} />
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
-      </div>
+    <div className="app">
+      <Header onMenu={() => setDrawer(true)} details={details} onToggleDetails={() => setDetails((d) => !d)} />
+      <Routes>
+        <Route path="/" element={<Home />} />
+        <Route path="/c/:id" element={<ChatRoute details={details} />} />
+        <Route path="/settings" element={<SettingsPage />} />
+        <Route path="/admin" element={<AdminGuard />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+      {drawer && <HistoryDrawer onClose={() => setDrawer(false)} />}
     </div>
   )
 }
 
-function Sidebar({ onNavigate }: { onNavigate: () => void }) {
-  const { conversations, create, expiresIn } = useConversations()
-  const { id } = useParams()
-  const navigate = useNavigate()
-  const { isAdmin } = useAuth()
-  return (
-    <aside className="sidebar">
-      <button
-        onClick={async () => {
-          navigate(`/c/${await create()}`)
-          onNavigate()
-        }}
-      >
-        + New chat
-      </button>
-      {conversations.map((c) => (
-        <Link key={c.id} to={`/c/${c.id}`} onClick={onNavigate} className={`conv ${c.id === id ? 'active' : ''}`}>
-          {c.title ?? 'New chat'}
-          <div className="meta">auto-deletes in {Math.ceil(expiresIn(c) / 86_400_000)}d</div>
-        </Link>
-      ))}
-      <div style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', gap: 4 }}>
-        <Link to="/settings" onClick={onNavigate}>Settings</Link>
-        {isAdmin && <Link to="/admin" onClick={onNavigate}>Admin console</Link>}
-      </div>
-    </aside>
-  )
+function shortModel(label: string | undefined): string {
+  if (!label) return 'No model'
+  return label.replace(/\s*\(.*\)\s*$/, '').replace(/^Ollama\s+/, '')
 }
 
-function TopBar({ onMenu }: { onMenu: () => void }) {
+function Header({ onMenu, details, onToggleDetails }: { onMenu: () => void; details: boolean; onToggleDetails: () => void }) {
   const online = useOnline()
-  const auth = useAuth()
   const sync = useSyncStatus()
+  const auth = useAuth()
+  const model = useModel()
+  const dot = !online ? 'warn' : sync.phase === 'error' ? 'bad' : 'ok'
+  const dotTitle = !online ? 'Offline: everything still works on this device' : auth.status === 'signedIn' ? `Online · sync ${sync.phase}` : 'Online'
+  const chip =
+    model.status === 'loading'
+      ? `Loading ${Math.round((model.progress?.fraction ?? 0) * 100)}%`
+      : model.status === 'ready'
+        ? shortModel(model.spec?.label)
+        : 'Choose model'
   return (
-    <header className="topbar">
-      <button onClick={onMenu} aria-label="Menu">☰</button>
-      <strong>Shreyan.ai</strong>
-      <span className={`pill ${online ? 'ok' : 'warn'}`}>{online ? 'online' : 'offline'}</span>
-      {auth.status === 'signedIn' && (
-        <span className="pill" title={sync.error ?? ''}>
-          sync: {sync.phase}
-          {sync.realtime ? ' · live' : ''}
-          {sync.pending ? ` · ${sync.pending} pending` : ''}
-        </span>
-      )}
-      <ModelPicker />
-      <TelemetryHud />
-      <span style={{ marginLeft: 'auto' }} />
-      {auth.status === 'signedIn' && (
-        <>
-          <span className="meta">
-            {auth.user?.email} {auth.isAdmin && <b>(admin)</b>}
-          </span>
-          <button onClick={() => void auth.signOut()}>Sign out</button>
-        </>
-      )}
-      {auth.status === 'signedOut' && <button onClick={() => void auth.signInWithGoogle()}>Sign in with Google to sync</button>}
-      {auth.status === 'disabled' && <span className="meta">guest mode (cloud not configured)</span>}
+    <header className="header">
+      <button className="icon" onClick={onMenu} aria-label="Chat history">☰</button>
+      <Link to="/" className="brand">Shreyan.ai</Link>
+      <span className={`dot ${dot}`} title={dotTitle} aria-label={dotTitle} />
+      <span className="spacer" />
+      <button className={`chip ${model.status === 'error' ? 'bad' : ''}`} onClick={onToggleDetails} title="Model and details">
+        {chip}
+      </button>
+      <button className={`icon ${details ? 'on' : ''}`} onClick={onToggleDetails} aria-label="Show details" aria-pressed={details}>
+        ⚙
+      </button>
     </header>
   )
 }
 
-function Home() {
-  const { conversations, create } = useConversations()
+function Tabs() {
+  const tabs = useTabs()
   const navigate = useNavigate()
-  if (conversations.length) return <Navigate to={`/c/${conversations[0].id}`} replace />
+  const strip = useRef<HTMLElement>(null)
+  // Keep the active tab visible when there are more tabs than fit on screen.
+  useEffect(() => {
+    const el = strip.current?.querySelector<HTMLElement>('.tab.active')
+    if (el) {
+      el.scrollIntoView({ inline: 'nearest', block: 'nearest' })
+    }
+  }, [tabs.activeId, tabs.tabs.length])
   return (
-    <div className="page">
-      <h2>Private AI that runs on your device</h2>
-      <p>Pick a model above (downloaded once, then works offline), then start a chat.</p>
-      <button onClick={async () => navigate(`/c/${await create()}`)}>Start a chat</button>
-    </div>
+    <nav className="tabs" aria-label="Open chats" ref={strip}>
+      {tabs.tabs.map((c) => (
+        <div key={c.id} className={`tab ${c.id === tabs.activeId ? 'active' : ''}`}>
+          <button className="tab-title" onClick={() => navigate(`/c/${c.id}`)} title={c.title ?? 'New chat'}>
+            {c.title ?? 'New chat'}
+          </button>
+          <button
+            className="tab-close"
+            aria-label="Close tab"
+            onClick={async () => {
+              const next = await tabs.close(c.id)
+              if (c.id === tabs.activeId) navigate(next.active ? `/c/${next.active}` : '/')
+            }}
+          >
+            ×
+          </button>
+        </div>
+      ))}
+      <button className="tab-new" aria-label="New tab" onClick={async () => navigate(`/c/${await tabs.newTab()}`)}>
+        +
+      </button>
+    </nav>
   )
 }
 
-function ChatRoute() {
+function ChatRoute({ details }: { details: boolean }) {
   const { id } = useParams()
-  return <ChatView key={id} conversationId={id!} />
+  const tabs = useTabs()
+  const { open } = tabs
+  useEffect(() => {
+    if (id) void open(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id])
+  return (
+    <>
+      <Tabs />
+      {details && <DetailsPanel conversationId={id!} />}
+      <ChatView key={id} conversationId={id!} />
+    </>
+  )
+}
+
+function Home() {
+  const tabs = useTabs()
+  const navigate = useNavigate()
+  if (tabs.loading) return null
+  if (tabs.activeId) return <Navigate to={`/c/${tabs.activeId}`} replace />
+  return (
+    <>
+      <Tabs />
+      <div className="page welcome">
+        <h2>Private AI that runs on your device</h2>
+        <p className="meta">Your chats stay on this device, sync when you sign in, and are deleted automatically after 15 days.</p>
+        <button className="primary" onClick={async () => navigate(`/c/${await tabs.newTab()}`)}>Start a new chat</button>
+      </div>
+    </>
+  )
+}
+
+function HistoryDrawer({ onClose }: { onClose: () => void }) {
+  const { conversations, expiresIn } = useConversations()
+  const { isAdmin } = useAuth()
+  const navigate = useNavigate()
+  const tabs = useTabs()
+  return (
+    <div className="scrim" onClick={onClose}>
+      <aside className="drawer" onClick={(e) => e.stopPropagation()}>
+        <div className="drawer-head">
+          <b>Chats</b>
+          <button className="icon" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <button
+          className="primary"
+          onClick={async () => {
+            navigate(`/c/${await tabs.newTab()}`)
+            onClose()
+          }}
+        >
+          + New chat
+        </button>
+        <div className="history">
+          {conversations.map((c) => (
+            <button
+              key={c.id}
+              className={`history-item ${c.id === tabs.activeId ? 'active' : ''}`}
+              onClick={() => {
+                navigate(`/c/${c.id}`)
+                onClose()
+              }}
+            >
+              <span>{c.title ?? 'New chat'}</span>
+              <span className="meta">deletes in {Math.ceil(expiresIn(c) / 86_400_000)}d</span>
+            </button>
+          ))}
+          {!conversations.length && <p className="meta">No chats yet.</p>}
+        </div>
+        <div className="drawer-foot">
+          <Link to="/settings" onClick={onClose}>Settings</Link>
+          {isAdmin && <Link to="/admin" onClick={onClose}>Admin console</Link>}
+        </div>
+      </aside>
+    </div>
+  )
 }
 
 function AdminGuard() {

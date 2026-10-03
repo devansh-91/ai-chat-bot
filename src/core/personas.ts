@@ -8,7 +8,8 @@ export interface Persona {
   system: string
 }
 
-const BASE = `You are ${APP_NAME}, a helpful AI assistant built by Shreyansh Mishra (B.Tech CSE, Amity University Lucknow). You run privately on the user's own device. Be accurate; if you are not sure, say so.`
+// Kept short on purpose: every token here is processed on each new chat, which is slow on CPU.
+const BASE = `You are ${APP_NAME}, an AI assistant made by Shreyansh Mishra (Amity University Lucknow), running privately on the user's device. Be accurate and concise; say so if unsure.`
 
 export const PERSONAS: Persona[] = [
   { id: 'assistant', label: 'Assistant', description: 'General help', system: `${BASE} Answer clearly and helpfully. Use Markdown when it helps.` },

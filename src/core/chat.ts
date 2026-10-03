@@ -2,7 +2,7 @@ import { setGenerating, track } from './activity'
 import { currentOwnerId, requestSync } from './auth'
 import { GUEST_OWNER } from './config'
 import { db, type LocalMessage } from './db'
-import { generate, modelState } from './llm/engine'
+import { ensureModel, generate, modelState } from './llm/engine'
 import { buildPrompt } from './personas'
 import { createStore } from './store'
 import { recordTurn } from './telemetry'
@@ -82,8 +82,9 @@ function setError(conversationId: string, error: string | null) {
 }
 
 /**
- * Appends the user's message, streams the assistant reply, and stores it with its latency metrics.
- * `onDelta` lets callers (e.g. text-to-speech) consume tokens as they arrive.
+ * Appends the user's message (visible immediately), then streams the assistant reply.
+ * If no model is loaded yet, the default one is loaded first; the user message stays on screen
+ * meanwhile. `onDelta` lets callers (e.g. text-to-speech) consume tokens as they arrive.
  */
 export async function sendMessage(
   conversationId: string,
@@ -95,8 +96,6 @@ export async function sendMessage(
   if (!content || controllers.has(conversationId)) return null
   const conv = await db.conversations.get(conversationId)
   if (!conv || conv.deletedAt) throw new Error('Conversation not found')
-  const { spec, device } = modelState.get()
-  if (!spec || modelState.get().status !== 'ready') throw new Error('Load a model first')
 
   const now = Date.now()
   await db.messages.add({
@@ -114,56 +113,102 @@ export async function sendMessage(
     updatedAt: now,
     dirty: 1,
   })
-  track('message_sent', { persona: conv.persona, chars: content.length, model: spec.modelId, offline: !navigator.onLine })
+  track('message_sent', {
+    persona: conv.persona,
+    chars: content.length,
+    model: modelState.get().spec?.modelId ?? null,
+    offline: !navigator.onLine,
+  })
   requestSync()
+  return generateReply(conversationId, onDelta, opts)
+}
 
-  const history = await db.messages.where('[conversationId+createdAt]').between([conversationId, 0], [conversationId, Infinity]).toArray()
-  const prompt = buildPrompt(conv.persona, history, spec.contextTokens)
+/** True if the last message in the chat is the user's and still has no reply (e.g. after an error). */
+export async function needsReply(conversationId: string): Promise<boolean> {
+  const last = await db.messages.where('[conversationId+createdAt]').between([conversationId, 0], [conversationId, Infinity]).last()
+  return last?.role === 'user'
+}
+
+/** Generates the assistant's reply to the conversation as it stands (used by send and retry). */
+export async function generateReply(
+  conversationId: string,
+  onDelta?: (delta: string) => void,
+  opts: { spoken?: boolean } = {},
+): Promise<LocalMessage | null> {
+  if (controllers.has(conversationId)) return null
+  const conv = await db.conversations.get(conversationId)
+  if (!conv || conv.deletedAt) return null
 
   const controller = new AbortController()
   controllers.set(conversationId, controller)
   setError(conversationId, null)
   setPartial(conversationId, '')
   setGenerating(true)
+  const startedAt = Date.now()
   let partial = ''
+  let modelId: string | null = modelState.get().spec?.modelId ?? null
   try {
-    const { text: reply, metrics } = await generate(prompt, {
-      signal: controller.signal,
-      onToken: (delta) => {
-        partial += delta
-        setPartial(conversationId, partial)
-        onDelta?.(delta)
-      },
-    })
-    await recordTurn(metrics, { ownerId: conv.ownerId, device })
-    track('reply', {
-      model: metrics.model,
-      provider: metrics.provider,
-      ttft_ms: metrics.ttftMs,
-      total_ms: metrics.totalMs,
-      tokens: metrics.outputTokens,
-      tps: metrics.tokensPerSec,
-      spoken: !!opts.spoken,
-    })
-    if (!reply.trim()) return null
-    const message: LocalMessage = {
-      id: crypto.randomUUID(),
-      conversationId,
-      ownerId: conv.ownerId,
-      role: 'assistant',
-      content: reply.trim(),
-      model: spec.modelId,
-      createdAt: Date.now(),
-      dirty: 1,
-      metrics,
+    await ensureModel()
+    if (controller.signal.aborted) return null
+    const { spec, device } = modelState.get()
+    if (!spec) throw new Error('No model loaded')
+    modelId = spec.modelId
+
+    const history = await db.messages
+      .where('[conversationId+createdAt]')
+      .between([conversationId, 0], [conversationId, Infinity])
+      .toArray()
+    const prompt = buildPrompt(conv.persona, history, spec.contextTokens, spec.provider === 'wllama' ? 512 : 768)
+
+    try {
+      const { text: reply, metrics } = await generate(prompt, {
+        signal: controller.signal,
+        maxTokens: spec.provider === 'wllama' ? 512 : 1024,
+        onToken: (delta) => {
+          partial += delta
+          setPartial(conversationId, partial)
+          onDelta?.(delta)
+        },
+      })
+      await recordTurn(metrics, { ownerId: conv.ownerId, device })
+      track('reply', {
+        model: metrics.model,
+        provider: metrics.provider,
+        ttft_ms: metrics.ttftMs,
+        total_ms: metrics.totalMs,
+        tokens: metrics.outputTokens,
+        tps: metrics.tokensPerSec,
+        spoken: !!opts.spoken,
+      })
+      if (!reply.trim()) return null
+      const message: LocalMessage = {
+        id: crypto.randomUUID(),
+        conversationId,
+        ownerId: conv.ownerId,
+        role: 'assistant',
+        content: reply.trim(),
+        model: spec.modelId,
+        createdAt: Date.now(),
+        dirty: 1,
+        metrics,
+      }
+      await db.messages.add(message)
+      await db.conversations.update(conversationId, { updatedAt: message.createdAt, dirty: 1 })
+      requestSync()
+      return message
+    } catch (e) {
+      // Only generation failures count as reply errors in telemetry (not model loading).
+      if (!controller.signal.aborted) {
+        await recordTurn(
+          { provider: spec.provider, model: spec.modelId, ttftMs: null, totalMs: Date.now() - startedAt, outputTokens: 0, tokensPerSec: null },
+          { ownerId: conv.ownerId, device, error: e instanceof Error ? e.message : String(e) },
+        )
+      }
+      throw e
     }
-    await db.messages.add(message)
-    await db.conversations.update(conversationId, { updatedAt: message.createdAt, dirty: 1 })
-    requestSync()
-    return message
   } catch (e) {
     const aborted = controller.signal.aborted
-    if (aborted) track('reply_stopped', { model: spec.modelId, chars: partial.length })
+    if (aborted) track('reply_stopped', { model: modelId, chars: partial.length })
     if (aborted && partial.trim()) {
       // Keep what was generated before the user pressed stop.
       await db.messages.add({
@@ -172,7 +217,7 @@ export async function sendMessage(
         ownerId: conv.ownerId,
         role: 'assistant',
         content: partial.trim(),
-        model: spec.modelId,
+        model: modelId,
         createdAt: Date.now(),
         dirty: 1,
       })
@@ -181,11 +226,7 @@ export async function sendMessage(
     if (!aborted) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(conversationId, msg)
-      track('reply_error', { model: spec.modelId, error: msg.slice(0, 200) })
-      await recordTurn(
-        { provider: spec.provider, model: spec.modelId, ttftMs: null, totalMs: Date.now() - now, outputTokens: 0, tokensPerSec: null },
-        { ownerId: conv.ownerId, device, error: msg },
-      )
+      track('reply_error', { model: modelId, error: msg.slice(0, 200) })
     }
     return null
   } finally {

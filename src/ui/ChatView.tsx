@@ -1,45 +1,50 @@
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { PERSONAS, reportTyping, useChat, useConversations, useModel, useVoice } from '../hooks'
+import { reportTyping, useChat, useModel, useVoice } from '../hooks'
 
 export function ChatView({ conversationId }: { conversationId: string }) {
   const chat = useChat(conversationId)
-  const { remove, setPersona } = useConversations()
   const model = useModel()
   const voice = useVoice()
-  const navigate = useNavigate()
   const [text, setText] = useState('')
-  const [sending, setSending] = useState(false)
-  const [sendError, setSendError] = useState<string | null>(null)
-  const bottom = useRef<HTMLDivElement>(null)
+  const [openMeta, setOpenMeta] = useState<string | null>(null)
+  const list = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLTextAreaElement>(null)
 
-  // Braces matter: newer Chrome returns a Promise from scrollIntoView, and React would treat a
-  // returned value as a cleanup function and crash.
+  // Follow new messages, but don't yank the view if the user scrolled up to read.
   useEffect(() => {
-    bottom.current?.scrollIntoView({ block: 'end' })
+    const el = list.current
+    if (!el) return
+    if (el.scrollHeight - el.scrollTop - el.clientHeight < 160) el.scrollTop = el.scrollHeight
   }, [chat.messages.length, chat.streamingText, model.status, model.progress?.fraction])
+
+  // Always jump to the bottom when switching tabs.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (list.current) list.current.scrollTop = list.current.scrollHeight
+    }, 0)
+    return () => clearTimeout(t)
+  }, [conversationId, chat.conversation?.id])
+
+  // Auto-grow the composer up to a few lines.
+  useEffect(() => {
+    const el = input.current
+    if (!el) return
+    el.style.height = 'auto'
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+  }, [text])
 
   if (!chat.conversation) return <div className="page">Chat not found.</div>
   const ready = model.status === 'ready'
   const loading = model.status === 'loading'
   const defaultKey = model.spec?.key ?? model.lastUsedKey ?? model.recommendedKey
   const defaultSpec = model.available.find((s) => s.key === defaultKey)
-  const busy = sending || chat.isGenerating
 
-  const submit = async () => {
+  const submit = () => {
     const t = text.trim()
-    if (!t || busy) return
+    if (!t || chat.isGenerating) return
     setText('')
-    setSendError(null)
-    setSending(true)
-    try {
-      await chat.send(t)
-    } catch (e) {
-      setText(t) // keep the draft if the model could not load
-      setSendError(e instanceof Error ? e.message : String(e))
-    } finally {
-      setSending(false)
-    }
+    void chat.send(t)
+    input.current?.focus()
   }
 
   const toggleMic = async () => {
@@ -51,72 +56,93 @@ export function ChatView({ conversationId }: { conversationId: string }) {
     }
   }
 
+  const empty = chat.messages.length === 0 && !chat.isGenerating
+
   return (
     <>
-      <div className="topbar">
-        <select value={chat.conversation.persona} onChange={(e) => void setPersona(conversationId, e.target.value)}>
-          {PERSONAS.map((p) => (
-            <option key={p.id} value={p.id}>{p.label}</option>
-          ))}
-        </select>
-        <button
-          onClick={async () => {
-            await remove(conversationId)
-            navigate('/')
-          }}
-        >
-          Delete chat
-        </button>
-      </div>
-      <div className="messages">
-        {!ready && !loading && (
-          <div className="notice">
-            <b>No AI model loaded yet.</b>
-            <div className="meta">
-              {defaultSpec
-                ? `${defaultSpec.label}${defaultSpec.downloadMB ? ` · ${defaultSpec.downloadMB} MB, downloaded once (use Wi-Fi), then works offline` : ''}`
-                : 'Pick a model from the list at the top.'}
+      <div className="messages" ref={list}>
+        <div className="thread">
+          {empty && !ready && !loading && (
+            <div className="notice">
+              <b>Load an AI model to start</b>
+              <span className="meta">
+                {defaultSpec
+                  ? `${defaultSpec.label}${defaultSpec.downloadMB ? ` · ${defaultSpec.downloadMB} MB, downloaded once (use Wi-Fi), then works offline` : ''}`
+                  : 'Tap ⚙ to pick a model.'}
+              </span>
+              {defaultKey && (
+                <button className="primary" onClick={() => void model.load(defaultKey).catch(() => {})}>
+                  {defaultSpec?.downloadMB ? 'Download & load' : 'Load model'}
+                </button>
+              )}
+              <span className="meta">Or just type below: the model loads automatically when you send.</span>
             </div>
-            {defaultKey && (
-              <button onClick={() => void model.load(defaultKey).catch(() => {})}>
-                {defaultSpec?.downloadMB ? 'Download & load model' : 'Load model'}
-              </button>
-            )}
-            <div className="meta">Or just type a message and press Send: the model loads automatically.</div>
-          </div>
-        )}
-        {chat.messages.map((m) => (
-          <div key={m.id} className={`msg ${m.role}`}>
-            {m.content}
-            {m.role === 'assistant' && (
-              <div className="meta">
-                {m.model}
-                {m.metrics && ` · TTFT ${m.metrics.ttftMs} ms · ${m.metrics.tokensPerSec ?? '–'} tok/s · ${m.metrics.totalMs} ms`}{' '}
-                <button onClick={() => void voice.speak(m.content)}>🔊</button>
+          )}
+          {empty && (ready || loading) && <p className="meta center">Ask me anything.</p>}
+
+          {chat.messages.map((m) => (
+            <div key={m.id} className={`bubble-row ${m.role}`}>
+              <div className={`bubble ${m.role}`}>
+                {m.role === 'user' && <span className="who">You</span>}
+                <div className="text">{m.content}</div>
+                {m.role === 'assistant' && (
+                  <div className="bubble-actions">
+                    <button className="tiny" onClick={() => void voice.speak(m.content)} aria-label="Read aloud">🔊</button>
+                    {m.metrics && (
+                      <button className="tiny" onClick={() => setOpenMeta(openMeta === m.id ? null : m.id)} aria-label="Speed details">ⓘ</button>
+                    )}
+                    {openMeta === m.id && m.metrics && (
+                      <span className="meta">
+                        {m.model} · first word {m.metrics.ttftMs} ms · {m.metrics.tokensPerSec ?? '–'} tok/s · total {(m.metrics.totalMs / 1000).toFixed(1)} s
+                      </span>
+                    )}
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-        ))}
-        {loading && (
-          <div className="notice">
-            <b>Loading {model.spec?.label ?? 'model'}…</b>
-            <progress value={model.progress?.fraction ?? undefined} max={1} style={{ width: '100%' }} />
-            <div className="meta">{model.progress?.text}</div>
-            {sending && <div className="meta">Your message will be sent as soon as it's ready.</div>}
-          </div>
-        )}
-        {chat.streamingText !== undefined && <div className="msg assistant">{chat.streamingText || '…'}</div>}
-        {(chat.error || sendError || (model.status === 'error' && model.error)) && (
-          <div className="bad">{chat.error ?? sendError ?? model.error}</div>
-        )}
-        <div ref={bottom} />
+            </div>
+          ))}
+
+          {chat.isGenerating && loading && (
+            <div className="notice">
+              <b>Loading {model.spec?.label ?? 'model'}… {Math.round((model.progress?.fraction ?? 0) * 100)}%</b>
+              <progress value={model.progress?.fraction ?? undefined} max={1} />
+              <span className="meta">{model.progress?.text}</span>
+              <span className="meta">First time only. Your message will be answered as soon as it's ready.</span>
+            </div>
+          )}
+          {chat.isGenerating && !loading && (
+            <div className="bubble-row assistant">
+              <div className="bubble assistant">
+                {chat.streamingText ? <div className="text">{chat.streamingText}</div> : <span className="typing"><i /><i /><i /></span>}
+              </div>
+            </div>
+          )}
+          {chat.error && (
+            <div className="notice bad-notice">
+              <span>{chat.error}</span>
+              {chat.canRetry && <button onClick={() => void chat.retry()}>Try again</button>}
+            </div>
+          )}
+          {!chat.error && chat.canRetry && !chat.isGenerating && (
+            <div className="center">
+              <button onClick={() => void chat.retry()}>Get a reply</button>
+            </div>
+          )}
+        </div>
       </div>
+
       <div className="composer">
-        <button onClick={() => void toggleMic()} title={voice.dictation.engine ?? ''} aria-label="Voice input">
+        <button
+          className={`icon ${voice.dictation.listening ? 'on' : ''}`}
+          onClick={() => void toggleMic()}
+          title={voice.dictation.engine ?? 'Voice input'}
+          aria-label="Voice input"
+        >
           {voice.dictation.listening ? '■' : voice.dictation.transcribing ? '…' : '🎤'}
         </button>
         <textarea
-          rows={2}
+          ref={input}
+          rows={1}
           value={voice.dictation.listening && voice.dictation.interim ? voice.dictation.interim : text}
           placeholder="Message Shreyan.ai"
           enterKeyHint="send"
@@ -127,20 +153,18 @@ export function ChatView({ conversationId }: { conversationId: string }) {
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
               e.preventDefault()
-              void submit()
+              submit()
             }
           }}
         />
         {chat.isGenerating ? (
-          <button onClick={chat.stop}>Stop</button>
+          <button className="send" onClick={chat.stop} aria-label="Stop">■</button>
         ) : (
-          <button className="send" disabled={!text.trim() || busy} onClick={() => void submit()}>
-            {sending && !ready ? 'Loading…' : 'Send'}
-          </button>
+          <button className="send" disabled={!text.trim()} onClick={submit} aria-label="Send">➤</button>
         )}
-        {voice.isSpeaking && <button onClick={voice.stopSpeaking}>Mute</button>}
+        {voice.isSpeaking && <button className="icon" onClick={voice.stopSpeaking} aria-label="Stop speaking">🔇</button>}
       </div>
-      {voice.dictation.error && <div className="bad" style={{ padding: '0 12px 8px' }}>{voice.dictation.error}</div>}
+      {voice.dictation.error && <div className="bad center small">{voice.dictation.error}</div>}
     </>
   )
 }

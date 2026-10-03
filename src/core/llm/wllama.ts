@@ -32,6 +32,9 @@ export class WllamaProvider implements Provider {
     const stream = await this.wllama.createChatCompletion({
       messages,
       stream: true,
+      // Reuse the KV cache for the shared prefix (system prompt + earlier turns): in a long chat only
+      // the newest message has to be processed, which is the slow part on CPU.
+      cache_prompt: true,
       abortSignal: opts.signal,
       temperature: opts.temperature ?? 0.7,
       max_tokens: opts.maxTokens ?? 512,

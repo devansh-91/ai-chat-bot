@@ -5,12 +5,8 @@ export function ModelPicker() {
   const current = m.spec?.key ?? m.lastUsedKey ?? m.recommendedKey ?? ''
   return (
     <span className="model-picker">
-      <select
-        value={current}
-        disabled={m.status === 'loading'}
-        onChange={(e) => void m.load(e.target.value).catch(() => {})}
-      >
-        {!m.spec && <option value="">Choose a model…</option>}
+      <select value={current} disabled={m.status === 'loading'} onChange={(e) => void m.load(e.target.value).catch(() => {})} aria-label="Model">
+        {!current && <option value="">Choose a model…</option>}
         {m.available.map((s) => (
           <option key={s.key} value={s.key}>
             {s.label}
@@ -22,13 +18,9 @@ export function ModelPicker() {
       {m.status !== 'ready' && m.status !== 'loading' && current && (
         <button onClick={() => void m.load(current).catch(() => {})}>Load</button>
       )}
-      {m.status === 'loading' && (
-        <span className="meta">
-          <progress value={m.progress?.fraction ?? undefined} max={1} /> {m.progress?.text.slice(0, 60)}
-        </span>
-      )}
-      {m.status === 'error' && <span className="bad meta">{m.error}</span>}
-      {m.device && <span className="pill" title={JSON.stringify(m.device)}>tier: {m.device.tier}</span>}
+      {m.status === 'loading' && <progress value={m.progress?.fraction ?? undefined} max={1} />}
+      {m.status === 'error' && <span className="bad small">{m.error}</span>}
+      {m.device && <span className="meta">device: {m.device.tier === 'cpu' ? 'CPU only (no WebGPU)' : `GPU · ${m.device.tier}`}</span>}
     </span>
   )
 }
