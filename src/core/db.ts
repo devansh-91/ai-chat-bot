@@ -53,6 +53,15 @@ export interface PendingTelemetry {
   createdAt: number
 }
 
+export interface PendingActivity {
+  clientId: string
+  ownerId: string
+  kind: string
+  meta: Record<string, string | number | boolean | null>
+  deviceKind: 'mobile' | 'desktop'
+  createdAt: number
+}
+
 export interface KV {
   key: string
   value: unknown
@@ -62,6 +71,7 @@ export class LocalDB extends Dexie {
   conversations!: EntityTable<LocalConversation, 'id'>
   messages!: EntityTable<LocalMessage, 'id'>
   telemetry!: EntityTable<PendingTelemetry, 'clientId'>
+  activity!: EntityTable<PendingActivity, 'clientId'>
   kv!: EntityTable<KV, 'key'>
 
   constructor(name = 'shreyan-ai') {
@@ -71,6 +81,9 @@ export class LocalDB extends Dexie {
       messages: 'id, conversationId, [conversationId+createdAt], ownerId, dirty, createdAt',
       telemetry: 'clientId, ownerId, createdAt',
       kv: 'key',
+    })
+    this.version(2).stores({
+      activity: 'clientId, ownerId, createdAt',
     })
   }
 }

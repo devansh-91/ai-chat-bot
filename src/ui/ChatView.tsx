@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { PERSONAS, useChat, useConversations, useModel, useVoice } from '../hooks'
+import { PERSONAS, reportTyping, useChat, useConversations, useModel, useVoice } from '../hooks'
 
 export function ChatView({ conversationId }: { conversationId: string }) {
   const chat = useChat(conversationId)
@@ -73,7 +73,10 @@ export function ChatView({ conversationId }: { conversationId: string }) {
           rows={2}
           value={voice.dictation.listening && voice.dictation.interim ? voice.dictation.interim : text}
           placeholder={ready ? 'Message Shreyan.ai' : 'Load a model to start'}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value)
+            reportTyping()
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
               e.preventDefault()

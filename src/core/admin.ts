@@ -58,6 +58,53 @@ export interface AuditEntry {
   created_at: string
 }
 
+export interface LiveUser {
+  user_id: string
+  email: string | null
+  display_name: string | null
+  avatar_url: string | null
+  role: AppRole
+  /** active | idle | typing | generating | listening | offline */
+  status: string
+  page: string | null
+  model: string | null
+  device_kind: 'mobile' | 'desktop' | null
+  device_tier: string | null
+  updated_at: string | null
+  online: boolean
+  events_1h: number
+  last_event: string | null
+  last_event_at: string | null
+}
+
+export interface ActivityEvent {
+  id: number
+  user_id: string
+  email: string | null
+  display_name: string | null
+  avatar_url: string | null
+  kind: string
+  meta: Record<string, unknown>
+  device_kind: 'mobile' | 'desktop' | null
+  created_at: string
+}
+
+export interface ActivityStats {
+  online_now: number
+  active_users: number
+  by_kind: Record<string, number>
+  by_device: Record<string, number>
+  top_models: { model: string; replies: number }[]
+  top_personas: { persona: string; messages: number }[]
+}
+
+export interface ActivityFilter {
+  since: Date
+  userId?: string | null
+  kind?: string | null
+  limit?: number
+}
+
 function client() {
   if (!supabase) throw new Error('Cloud is not configured')
   return supabase
@@ -77,9 +124,85 @@ export const adminApi = {
   users: () => rpc<AdminUser[]>('admin_list_users'),
   setRole: (userId: string, role: AppRole) => rpc<void>('admin_set_role', { target: userId, new_role: role }),
   runPurge: () => rpc<Record<string, number | string>>('admin_run_purge'),
+  liveUsers: () => rpc<LiveUser[]>('admin_live_users'),
+  activityFeed: (f: ActivityFilter) =>
+    rpc<ActivityEvent[]>('admin_activity_feed', {
+      since: f.since.toISOString(),
+      max_rows: f.limit ?? 200,
+      only_user: f.userId ?? null,
+      only_kind: f.kind ?? null,
+    }),
+  activityStats: (since: Date) => rpc<ActivityStats>('admin_activity_stats', { since: since.toISOString() }),
   async audit(limit = 100): Promise<AuditEntry[]> {
     const { data, error } = await client().from('audit_log').select('*').order('created_at', { ascending: false }).limit(limit)
     if (error) throw error
     return data as AuditEntry[]
   },
+}
+
+/** Seconds without a heartbeat before a user counts as offline. Mirrors public.presence_timeout(). */
+export const PRESENCE_TIMEOUT_MS = 75_000
+
+interface PresenceRow {
+  user_id: string
+  status: string
+  page: string | null
+  model: string | null
+  device_kind: 'mobile' | 'desktop' | null
+  device_tier: string | null
+  updated_at: string
+}
+
+interface ActivityRow {
+  id: number
+  user_id: string
+  kind: string
+  meta: Record<string, unknown>
+  device_kind: 'mobile' | 'desktop' | null
+  created_at: string
+}
+
+/**
+ * Live stream of activity and presence changes. Postgres only delivers these rows to subscribers
+ * whose RLS select policy passes, so non-admins receive nothing even if they subscribe.
+ */
+export function subscribeActivity(handlers: {
+  onEvent: (row: ActivityRow) => void
+  onPresence: (row: PresenceRow) => void
+  onStatus?: (live: boolean) => void
+}): () => void {
+  const sb = client()
+  const channel = sb
+    .channel(`admin-activity-${crypto.randomUUID()}`)
+    .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activity_events' }, (p) =>
+      handlers.onEvent(p.new as ActivityRow),
+    )
+    .on('postgres_changes', { event: '*', schema: 'public', table: 'user_presence' }, (p) => {
+      if (p.new && 'user_id' in p.new) handlers.onPresence(p.new as PresenceRow)
+    })
+    .subscribe((status) => handlers.onStatus?.(status === 'SUBSCRIBED'))
+  return () => void sb.removeChannel(channel)
+}
+
+/** Applies a realtime presence row to the live-user list (pure; unit tested). */
+export function applyPresence(users: LiveUser[], row: PresenceRow, now = Date.now()): LiveUser[] {
+  return users.map((u) => {
+    if (u.user_id !== row.user_id) return u
+    const fresh = now - Date.parse(row.updated_at) < PRESENCE_TIMEOUT_MS
+    const online = fresh && row.status !== 'offline'
+    return { ...u, ...row, status: online ? row.status : 'offline', online }
+  })
+}
+
+/** Marks users whose heartbeat went stale as offline (pure; unit tested). */
+export function expirePresence(users: LiveUser[], now = Date.now()): LiveUser[] {
+  return users.map((u) =>
+    u.online && u.updated_at && now - Date.parse(u.updated_at) >= PRESENCE_TIMEOUT_MS ? { ...u, online: false, status: 'offline' } : u,
+  )
+}
+
+/** Online first, then most recently seen. */
+export function sortLiveUsers(users: LiveUser[]): LiveUser[] {
+  const seen = (u: LiveUser) => Date.parse(u.updated_at ?? u.last_event_at ?? '') || 0
+  return [...users].sort((a, b) => Number(b.online) - Number(a.online) || seen(b) - seen(a))
 }

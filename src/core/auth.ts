@@ -1,4 +1,5 @@
-import type { Session } from '@supabase/supabase-js'
+import type { AuthChangeEvent, Session } from '@supabase/supabase-js'
+import { activityContext, PresenceReporter, track } from './activity'
 import { GUEST_OWNER } from './config'
 import { createStore } from './store'
 import { supabase } from './supabase'
@@ -30,6 +31,9 @@ export const authState = createStore<AuthState>({
 })
 
 let engine: SyncEngine | null = null
+let presence: PresenceReporter | null = null
+
+activityContext.onQueued = () => engine?.request()
 
 /** Current data owner: the signed-in user's id, or the guest bucket. */
 export function currentOwnerId(): string {
@@ -56,12 +60,15 @@ export function decodeJwtClaims(token: string): Record<string, unknown> {
   }
 }
 
-async function applySession(session: Session | null): Promise<void> {
+async function applySession(session: Session | null, event: AuthChangeEvent | 'RESTORED'): Promise<void> {
   const sb = supabase!
   const prev = authState.get().user
   if (!session) {
     engine?.stop()
     engine = null
+    void presence?.stop()
+    presence = null
+    activityContext.ownerId = GUEST_OWNER
     authState.set({ status: 'signedOut', user: null, role: 'user', roleVerified: false })
     return
   }
@@ -82,9 +89,17 @@ async function applySession(session: Session | null): Promise<void> {
   }))
   if (!sameUser || !engine) {
     await claimGuestData(GUEST_OWNER, user.id)
+    activityContext.ownerId = user.id
     engine?.stop()
     engine = new SyncEngine(sb, user.id)
     engine.start()
+    void presence?.stop()
+    presence = new PresenceReporter(sb, user.id)
+    presence.start()
+    track(event === 'SIGNED_IN' ? 'sign_in' : 'session_start', {
+      installed: window.matchMedia?.('(display-mode: standalone)').matches ?? false,
+      online: navigator.onLine,
+    })
   }
   // Confirm role from the database (authoritative; works only online).
   const { data } = await sb.from('profiles').select('role').eq('id', user.id).maybeSingle()
@@ -95,11 +110,11 @@ async function applySession(session: Session | null): Promise<void> {
 export async function initAuth(): Promise<void> {
   if (!supabase) return
   const { data } = await supabase.auth.getSession()
-  await applySession(data.session)
+  await applySession(data.session, 'RESTORED')
   supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'INITIAL_SESSION') return
     // Supabase recommends not awaiting other supabase calls inside this callback.
-    setTimeout(() => void applySession(session), 0)
+    setTimeout(() => void applySession(session, event), 0)
   })
 }
 
@@ -116,8 +131,14 @@ export async function signInWithGoogle(): Promise<void> {
 export async function signOut(): Promise<void> {
   if (!supabase) return
   const id = authState.get().user?.id
+  // Upload the sign-out event and any pending changes while the session is still valid.
+  await track('sign_out')
+  await engine?.run().catch(() => {})
   engine?.stop()
   engine = null
+  await presence?.stop()
+  presence = null
+  activityContext.ownerId = GUEST_OWNER
   await supabase.auth.signOut()
   if (id) await wipeUserData(id)
 }

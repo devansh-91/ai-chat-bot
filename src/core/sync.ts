@@ -135,19 +135,21 @@ export function messageToRow(m: LocalMessage) {
 
 /** Moves data created while signed out to the signed-in account so it syncs. */
 export async function claimGuestData(guestId: string, userId: string, database: LocalDB = db): Promise<void> {
-  await database.transaction('rw', database.conversations, database.messages, database.telemetry, async () => {
+  await database.transaction('rw', [database.conversations, database.messages, database.telemetry, database.activity], async () => {
     await database.conversations.where('ownerId').equals(guestId).modify({ ownerId: userId, dirty: 1 })
     await database.messages.where('ownerId').equals(guestId).modify({ ownerId: userId, dirty: 1 })
     await database.telemetry.where('ownerId').equals(guestId).modify({ ownerId: userId })
+    await database.activity.where('ownerId').equals(guestId).modify({ ownerId: userId })
   })
 }
 
 /** Removes a signed-out user's data from this device (shared-device privacy). */
 export async function wipeUserData(userId: string, database: LocalDB = db): Promise<void> {
-  await database.transaction('rw', [database.conversations, database.messages, database.telemetry, database.kv], async () => {
+  await database.transaction('rw', [database.conversations, database.messages, database.telemetry, database.activity, database.kv], async () => {
     await database.conversations.where('ownerId').equals(userId).delete()
     await database.messages.where('ownerId').equals(userId).delete()
     await database.telemetry.where('ownerId').equals(userId).delete()
+    await database.activity.where('ownerId').equals(userId).delete()
     await database.kv.delete(`cursor:conversations:${userId}`)
     await database.kv.delete(`cursor:messages:${userId}`)
   })
@@ -340,6 +342,23 @@ export class SyncEngine {
       )
       if (error) throw error
       await this.db.telemetry.bulkDelete(tel.map((t) => t.clientId))
+    }
+
+    const act = await this.db.activity.where('ownerId').equals(this.userId).limit(500).toArray()
+    if (act.length) {
+      const { error } = await this.sb.from('activity_events').upsert(
+        act.map((a) => ({
+          client_id: a.clientId,
+          user_id: this.userId,
+          kind: a.kind,
+          meta: a.meta,
+          device_kind: a.deviceKind,
+          created_at: iso(a.createdAt),
+        })),
+        { onConflict: 'user_id,client_id', ignoreDuplicates: true },
+      )
+      if (error) throw error
+      await this.db.activity.bulkDelete(act.map((a) => a.clientId))
     }
   }
 }

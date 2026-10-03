@@ -13,11 +13,13 @@ Costs nothing to run: no paid APIs and no servers to rent.
 | Poster claim | How it's built |
 |---|---|
 | **Calibrated masculine voice (Web Speech API)** | Ranks the device's voices (male → your language → works offline), pitch tuned to 0.85, speaks sentence by sentence *while* the reply streams. Voice input: browser speech recognition online, **Whisper running on-device** offline. |
-| **Role-based access control (cryptographic admin route)** | Google sign-in through Supabase. The role is **signed into the JWT** (`user_role` claim) by a Postgres hook, and every admin action is re-checked inside Postgres (row-level security plus `security definer` functions), so a hand-edited token or frontend can't get in. 27 database tests prove it. |
+| **Role-based access control (cryptographic admin route)** | Google sign-in through Supabase. The role is **signed into the JWT** (`user_role` claim) by a Postgres hook, and every admin action is re-checked inside Postgres (row-level security plus `security definer` functions), so a hand-edited token or frontend can't get in. Database tests prove it. |
 | **Live telemetry HUD (<800 ms)** | Every reply records time to first token, total latency and tokens/sec, shown live in the HUD and aggregated (p50/p95, share under 800 ms) in the admin console. Measured on a laptop: **TTFT 34–42 ms, ~53 tok/s** (Ollama, Llama 3.2 3B). |
 | **15-day auto-purge** | Server: `pg_cron` runs `purge_expired()` every hour. Device: the same rule runs on the local IndexedDB. Deleting a chat wipes its content immediately and syncs to all devices. |
 
 Also:
+- **Admin live activity monitor.** See who's online and what they're doing (typing, generating, using the mic,
+  which model and device) with a real-time event feed. Metadata only: admins never see message text.
 - **Works offline after first load.** Installable app; chats live in IndexedDB.
 - **Cross-device sync.** Realtime updates, plus a catch-up sync that copes with offline edits.
 - **Automatic model tiering.** Detects the device's capabilities and picks the right model (below).
@@ -53,8 +55,8 @@ Setting up the hosted version (Supabase cloud, Google OAuth, GitHub Pages): see 
 
 ```bash
 npm test                   # unit: sync merges, purge, tiering, voice, telemetry math
-npm run test:db            # pgTAP: RLS, role escalation, forged JWT, purge (27 assertions)
-npm run test:integration   # two simulated devices syncing through a real Supabase
+npm run test:db            # pgTAP: RLS, role escalation, forged JWT, activity privacy, purge (44 assertions)
+npm run test:integration   # two-device sync + admin realtime activity feed through a real Supabase
 ```
 
 ## Docs

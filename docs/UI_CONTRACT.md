@@ -10,8 +10,8 @@ voice and security keep working.
 2. **Model picker / first-run:** pick or download a model, with progress and a device-tier badge.
 3. **Telemetry HUD:** a small always-visible widget (TTFT, tokens/sec, p50, % under 800 ms).
 4. **Settings:** voice (voice list, pitch, rate, auto-read, test), Ollama URL, privacy info.
-5. **Admin console:** overview cards, latency by model, latency timeline (chart), users with
-   promote/demote, audit log, "run purge now".
+5. **Admin console:** overview cards, **live activity monitor** (who's online and what they're doing, plus a live
+   event feed), latency by model, latency timeline (chart), users with promote/demote, audit log, "run purge now".
 6. **Sign-in:** a "Continue with Google" button. Guest mode works without it.
 7. **Status chrome:** online/offline, sync state, pending changes, "auto-deletes in N days" on each chat.
 
@@ -79,8 +79,31 @@ Each of `overview`, `byModel`, `series`, `users`, `audit` is `{ data, error, loa
 
 Telemetry refreshes every 10 s. Non-admins get `error: 'Admin access required'`.
 
+### `useLiveActivity({ windowHours?, userId?, kind?, maxEvents? })` (admin)
+Who's on Shreyan.ai right now and what they're doing, updated in real time. **Metadata only, never message text.**
+
+| field | notes |
+|---|---|
+| `users[]` | online first: `user_id, display_name, email, avatar_url, role, online, status, page, model, device_kind, device_tier, updated_at, last_event, last_event_at, events_1h` |
+| `online[]` | subset of `users` that are online now |
+| `status` values | `generating` (AI is replying), `listening` (mic on), `typing`, `active`, `idle` (app in background), `offline` |
+| `feed[]` | newest first: `id, user_id, display_name, email, kind, meta, device_kind, created_at`. Use `describeActivity(e.kind, e.meta)` for a readable line, e.g. "got a reply from Qwen2.5… in 1.4 s (first token 320 ms)" |
+| `stats` | `online_now, active_users, by_kind{}, by_device{}, top_models[], top_personas[]` |
+| `live` | realtime connection is up (show a pulsing "LIVE" dot) |
+| `error`, `reload()` | |
+
+Pass `userId` to drill into one person, or `kind` (e.g. `'reply_error'`) to filter the feed.
+Event kinds: `session_start, sign_in, sign_out, chat_created, chat_deleted, persona_changed, message_sent, reply,
+reply_error, reply_stopped, model_loaded, model_error, voice_input, voice_output, page_view`.
+
+### Reporting (call these from your UI)
+- `usePageReporting(location.pathname)`: once, in the root component (already wired in the placeholder).
+- `reportTyping()`: in the composer's `onChange`, so admins see "typing" (the text is never sent).
+
+Everything else (generating, listening, model, device, events) is reported automatically.
+
 ### Constants
-`PERSONAS` (`{ id, label, description }[]`), `RETENTION_DAYS` (15), `LATENCY_TARGET_MS` (800), `CLOUD_ENABLED`.
+`PERSONAS` (`{ id, label, description }[]`), `RETENTION_DAYS` (15), `LATENCY_TARGET_MS` (800), `CLOUD_ENABLED`, `describeActivity`.
 
 ## Routes (current placeholder)
 `/` → latest chat · `/c/:id` · `/settings` · `/admin` (guarded; data is protected server-side anyway)

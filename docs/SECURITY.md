@@ -11,6 +11,8 @@
 | Data kept forever | 15-day `pg_cron` purge and local purge; future timestamps clamped | pgTAP + unit tests |
 | Deleted chat revived by an offline device | Deletion is enforced by a trigger and can't be undone | pgTAP + integration test |
 | Shared device leaks chats after sign-out | Sign-out wipes that account's local data | unit test |
+| Users spy on each other's activity | `activity_events` / `user_presence`: users read only their own rows, admins read all; realtime only delivers to subscribers who pass RLS | pgTAP + realtime integration test |
+| Activity monitor turns into chat surveillance | Only metadata is recorded (kind, model, latency, device, message length); `meta` is capped at 2 KB server-side and kinds are an allowlist; conversation ids are stripped from page paths | pgTAP + unit tests |
 | Role changes not traceable | `audit_log` written inside `admin_set_role` | pgTAP |
 
 **Keys:**

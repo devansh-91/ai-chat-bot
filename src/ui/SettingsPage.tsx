@@ -49,7 +49,11 @@ export function SettingsPage() {
       <pre className="meta">{JSON.stringify(m.device, null, 2)}</pre>
 
       <h3>Privacy</h3>
-      <p className="meta">Chats and telemetry are automatically deleted after {RETENTION_DAYS} days, on this device and in the cloud.</p>
+      <p className="meta">Chats, telemetry and activity are automatically deleted after {RETENTION_DAYS} days, on this device and in the cloud.</p>
+      <p className="meta">
+        When signed in, admins can see your activity (online status, when you chat, which model and how fast it replied) but never
+        the text of your messages.
+      </p>
     </div>
   )
 }

@@ -53,6 +53,14 @@ picks the largest model the device can run.
 - Admin aggregates use `percentile_cont`; the client uses the same calculation, so the HUD and
   the dashboard agree.
 
+**Activity monitor (admin).**
+- Each signed-in device keeps one `user_presence` row fresh: a heartbeat every 30 s, plus an immediate
+  update when the status changes (typing, generating, listening, idle). A user counts as offline after 75 s
+  without a heartbeat.
+- Events (`activity_events`) are queued in IndexedDB like telemetry and uploaded on sync, so offline usage
+  still shows up later.
+- Admins get both tables through Postgres realtime, which delivers rows only to subscribers who pass RLS.
+
 **15-day lifecycle.**
 - Server: `pg_cron` runs `purge_expired()` hourly.
 - Device: `purgeLocal()` runs on startup and hourly.

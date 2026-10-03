@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Link, Navigate, Route, Routes, useNavigate, useParams } from 'react-router-dom'
-import { useAuth, useConversations, useOnline, useSyncStatus } from '../hooks'
+import { Link, Navigate, Route, Routes, useLocation, useNavigate, useParams } from 'react-router-dom'
+import { useAuth, useConversations, useOnline, usePageReporting, useSyncStatus } from '../hooks'
 import { AdminPage } from './AdminPage'
 import { ChatView } from './ChatView'
 import { ModelPicker } from './ModelPicker'
@@ -13,6 +13,7 @@ import { TelemetryHud } from './TelemetryHud'
  */
 export default function App() {
   const [showSidebar, setShowSidebar] = useState(false)
+  usePageReporting(useLocation().pathname)
   return (
     <div className={`app ${showSidebar ? 'show-sidebar' : ''}`}>
       <Sidebar onNavigate={() => setShowSidebar(false)} />

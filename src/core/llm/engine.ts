@@ -1,3 +1,4 @@
+import { setPresenceModel, track } from '../activity'
 import type { TurnMetrics } from '../db'
 import { createStore } from '../store'
 import { findModel, ollamaSpec } from './catalog'
@@ -52,6 +53,7 @@ let loadSeq = 0
 export async function initDevice(): Promise<DeviceProfile> {
   const device = await detectDevice()
   modelState.set((s) => ({ ...s, device }))
+  setPresenceModel(modelState.get().spec?.modelId ?? null, device.tier)
   return device
 }
 
@@ -60,6 +62,7 @@ export async function loadModel(key: string): Promise<void> {
   const spec = findModel(key) ?? (key.startsWith('ollama:') ? ollamaSpec(key.slice(7)) : undefined)
   if (!spec) throw new Error(`Unknown model ${key}`)
   const seq = ++loadSeq
+  const startedAt = performance.now()
   modelState.set((s) => ({ ...s, status: 'loading', spec, progress: { fraction: 0, text: 'Starting…' }, error: null }))
   try {
     const provider = await getProvider(spec.provider)
@@ -75,8 +78,11 @@ export async function loadModel(key: string): Promise<void> {
       // selection just won't persist
     }
     modelState.set((s) => ({ ...s, status: 'ready', progress: null }))
+    setPresenceModel(spec.modelId)
+    track('model_loaded', { model: spec.modelId, provider: spec.provider, ms: Math.round(performance.now() - startedAt) })
   } catch (e) {
     if (seq === loadSeq) {
+      track('model_error', { model: spec.modelId, provider: spec.provider })
       modelState.set((s) => ({ ...s, status: 'error', progress: null, error: e instanceof Error ? e.message : String(e) }))
     }
     throw e

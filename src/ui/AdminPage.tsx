@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { LATENCY_TARGET_MS, useAdmin, useAuth } from '../hooks'
+import { ActivityMonitor } from './ActivityMonitor'
 
 const ms = (v: number | null | undefined) => (v == null ? '–' : `${Math.round(v)} ms`)
 
@@ -23,6 +24,8 @@ export function AdminPage() {
           <button onClick={() => void a.runPurge()}>Run purge now</button>
         </p>
       )}
+
+      <ActivityMonitor />
 
       <h3>
         Latency by model{' '}

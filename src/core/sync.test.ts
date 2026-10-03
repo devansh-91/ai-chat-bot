@@ -95,12 +95,15 @@ describe('account handover', () => {
   it('claims guest data on sign-in and wipes it on sign-out', async () => {
     await database.conversations.put({ id: 'g1', ownerId: 'guest', title: 't', persona: 'assistant', createdAt: 1, updatedAt: 1, deletedAt: null, dirty: 1 })
     await database.messages.put({ id: 'gm', conversationId: 'g1', ownerId: 'guest', role: 'user', content: 'x', model: null, createdAt: 1, dirty: 1 })
+    await database.activity.put({ clientId: 'ga', ownerId: 'guest', kind: 'chat_created', meta: {}, deviceKind: 'desktop', createdAt: 1 })
     await claimGuestData('guest', U, database)
+    expect((await database.activity.get('ga'))?.ownerId).toBe(U)
     expect((await database.conversations.get('g1'))?.ownerId).toBe(U)
     expect((await database.messages.get('gm'))?.ownerId).toBe(U)
     await wipeUserData(U, database)
     expect(await database.conversations.count()).toBe(0)
     expect(await database.messages.count()).toBe(0)
+    expect(await database.activity.count()).toBe(0)
   })
 })
 
@@ -117,7 +120,12 @@ describe('15-day local purge', () => {
       { id: 'b', conversationId: 'new', ownerId: U, role: 'user', content: 'x', model: null, createdAt: old, dirty: 0 },
       { id: 'c', conversationId: 'new', ownerId: U, role: 'user', content: 'x', model: null, createdAt: now, dirty: 0 },
     ])
+    await database.activity.bulkPut([
+      { clientId: 'old-act', ownerId: U, kind: 'reply', meta: {}, deviceKind: 'mobile', createdAt: old },
+      { clientId: 'new-act', ownerId: U, kind: 'reply', meta: {}, deviceKind: 'mobile', createdAt: now },
+    ])
     const r = await purgeLocal(now, database)
+    expect(await database.activity.toCollection().primaryKeys()).toEqual(['new-act'])
     expect(r.conversations).toBe(1)
     expect(await database.conversations.toCollection().primaryKeys()).toEqual(['new'])
     expect(await database.messages.toCollection().primaryKeys()).toEqual(['c'])

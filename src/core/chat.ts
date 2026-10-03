@@ -1,3 +1,4 @@
+import { setGenerating, track } from './activity'
 import { currentOwnerId, requestSync } from './auth'
 import { GUEST_OWNER } from './config'
 import { db, type LocalMessage } from './db'
@@ -29,6 +30,7 @@ export async function createConversation(persona = 'assistant'): Promise<string>
     deletedAt: null,
     dirty: 1,
   })
+  track('chat_created', { persona })
   requestSync()
   return id
 }
@@ -40,6 +42,7 @@ export async function renameConversation(id: string, title: string): Promise<voi
 
 export async function setConversationPersona(id: string, persona: string): Promise<void> {
   await db.conversations.update(id, { persona, updatedAt: Date.now(), dirty: 1 })
+  track('persona_changed', { persona })
   requestSync()
 }
 
@@ -53,6 +56,7 @@ export async function deleteConversation(id: string): Promise<void> {
     if (conv.ownerId === GUEST_OWNER) await db.conversations.delete(id)
     else await db.conversations.update(id, { deletedAt: Date.now(), title: null, updatedAt: Date.now(), dirty: 1 })
   })
+  track('chat_deleted')
   requestSync()
 }
 
@@ -85,6 +89,7 @@ export async function sendMessage(
   conversationId: string,
   text: string,
   onDelta?: (delta: string) => void,
+  opts: { spoken?: boolean } = {},
 ): Promise<LocalMessage | null> {
   const content = text.trim()
   if (!content || controllers.has(conversationId)) return null
@@ -109,6 +114,7 @@ export async function sendMessage(
     updatedAt: now,
     dirty: 1,
   })
+  track('message_sent', { persona: conv.persona, chars: content.length, model: spec.modelId, offline: !navigator.onLine })
   requestSync()
 
   const history = await db.messages.where('[conversationId+createdAt]').between([conversationId, 0], [conversationId, Infinity]).toArray()
@@ -118,6 +124,7 @@ export async function sendMessage(
   controllers.set(conversationId, controller)
   setError(conversationId, null)
   setPartial(conversationId, '')
+  setGenerating(true)
   let partial = ''
   try {
     const { text: reply, metrics } = await generate(prompt, {
@@ -129,6 +136,15 @@ export async function sendMessage(
       },
     })
     await recordTurn(metrics, { ownerId: conv.ownerId, device })
+    track('reply', {
+      model: metrics.model,
+      provider: metrics.provider,
+      ttft_ms: metrics.ttftMs,
+      total_ms: metrics.totalMs,
+      tokens: metrics.outputTokens,
+      tps: metrics.tokensPerSec,
+      spoken: !!opts.spoken,
+    })
     if (!reply.trim()) return null
     const message: LocalMessage = {
       id: crypto.randomUUID(),
@@ -147,6 +163,7 @@ export async function sendMessage(
     return message
   } catch (e) {
     const aborted = controller.signal.aborted
+    if (aborted) track('reply_stopped', { model: spec.modelId, chars: partial.length })
     if (aborted && partial.trim()) {
       // Keep what was generated before the user pressed stop.
       await db.messages.add({
@@ -164,6 +181,7 @@ export async function sendMessage(
     if (!aborted) {
       const msg = e instanceof Error ? e.message : String(e)
       setError(conversationId, msg)
+      track('reply_error', { model: spec.modelId, error: msg.slice(0, 200) })
       await recordTurn(
         { provider: spec.provider, model: spec.modelId, ttftMs: null, totalMs: Date.now() - now, outputTokens: 0, tokensPerSec: null },
         { ownerId: conv.ownerId, device, error: msg },
@@ -171,6 +189,7 @@ export async function sendMessage(
     }
     return null
   } finally {
+    setGenerating(false)
     controllers.delete(conversationId)
     setPartial(conversationId, null)
   }

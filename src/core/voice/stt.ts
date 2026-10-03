@@ -1,3 +1,4 @@
+import { setListening, track } from '../activity'
 import { createStore } from '../store'
 
 export type SttMode = 'auto' | 'on-device' | 'browser'
@@ -108,6 +109,8 @@ export async function startDictation(mode: SttMode = 'auto', lang = 'en-IN'): Pr
     return
   }
   dictation.set({ listening: true, transcribing: false, interim: '', engine, modelProgress: null, error: null })
+  setListening(true)
+  track('voice_input', { engine })
 
   if (engine === 'browser') {
     const Rec = getSpeechRecognition()!
@@ -146,6 +149,7 @@ export async function startDictation(mode: SttMode = 'auto', lang = 'en-IN'): Pr
     stream = await navigator.mediaDevices.getUserMedia({ audio: true })
   } catch {
     dictation.set((s) => ({ ...s, listening: false, error: 'Microphone permission denied' }))
+    setListening(false)
     return
   }
   const recorder = new MediaRecorder(stream)
@@ -180,6 +184,7 @@ export async function stopDictation(): Promise<string> {
     dictation.set((s) => ({ ...s, error: e instanceof Error ? e.message : String(e) }))
     return ''
   } finally {
+    setListening(false)
     dictation.set((s) => ({ ...s, listening: false, transcribing: false, interim: '' }))
   }
 }
@@ -188,5 +193,6 @@ export function cancelDictation(): void {
   cancelFn?.()
   stopFn = null
   cancelFn = null
+  setListening(false)
   dictation.set((s) => ({ ...s, listening: false, transcribing: false, interim: '' }))
 }

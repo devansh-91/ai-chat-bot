@@ -3,8 +3,23 @@
  * redesigned freely without touching models, sync, voice, or security code.
  */
 import { useLiveQuery } from 'dexie-react-hooks'
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
-import { adminApi, type AdminOverview, type AdminUser, type AuditEntry, type LatencyBucket, type ModelLatencyRow } from '../core/admin'
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
+import { describeActivity, reportTyping, setPresencePage, track } from '../core/activity'
+import {
+  adminApi,
+  applyPresence,
+  expirePresence,
+  sortLiveUsers,
+  subscribeActivity,
+  type ActivityEvent,
+  type ActivityStats,
+  type AdminOverview,
+  type AdminUser,
+  type AuditEntry,
+  type LatencyBucket,
+  type LiveUser,
+  type ModelLatencyRow,
+} from '../core/admin'
 import { authState, signInWithGoogle, signOut } from '../core/auth'
 import {
   createConversation,
@@ -29,8 +44,20 @@ import { recentTurns, summarize } from '../core/telemetry'
 import { dictation, startDictation, stopDictation, cancelDictation, type SttMode } from '../core/voice/stt'
 import { createStreamingSpeaker, getVoices, speak, speaking, stopSpeaking, voiceSettings, pickVoice } from '../core/voice/tts'
 
-export { PERSONAS, RETENTION_DAYS, LATENCY_TARGET_MS, CLOUD_ENABLED }
-export type { LocalConversation, LocalMessage, ModelSpec }
+export { PERSONAS, RETENTION_DAYS, LATENCY_TARGET_MS, CLOUD_ENABLED, describeActivity }
+export type { LocalConversation, LocalMessage, ModelSpec, LiveUser, ActivityEvent, ActivityStats }
+
+// ───────────── presence reporting (for the admin activity monitor) ─────────────
+/** Call from the router whenever the path changes. Ids are stripped before anything is sent. */
+export function usePageReporting(pathname: string): void {
+  useEffect(() => {
+    setPresencePage(pathname)
+    void track('page_view', { page: pathname.replace(/\/c\/[^/]+/, '/c/:id') })
+  }, [pathname])
+}
+
+/** Call on composer input so admins see "typing". Never sends the text itself. */
+export { reportTyping }
 
 // ───────────── auth ─────────────
 export function useAuth() {
@@ -108,7 +135,7 @@ export function useChat(conversationId: string | null) {
     async (text: string) => {
       if (!conversationId) return null
       const speaker = autoSpeak ? createStreamingSpeaker() : null
-      const msg = await sendMessage(conversationId, text, speaker ? (d) => speaker.push(d) : undefined)
+      const msg = await sendMessage(conversationId, text, speaker ? (d) => speaker.push(d) : undefined, { spoken: autoSpeak })
       speaker?.end()
       return msg
     },
@@ -176,7 +203,10 @@ export function useVoice() {
     voices,
     autoVoice: pickVoice(voices),
     isSpeaking,
-    speak: (text: string) => speak(text),
+    speak: (text: string) => {
+      void track('voice_output')
+      return speak(text)
+    },
     stopSpeaking,
     dictation: dict,
     startDictation: (mode?: SttMode, lang?: string) => startDictation(mode, lang),
@@ -239,5 +269,101 @@ export function useAdmin(windowHours = 24, refreshMs = 10_000) {
       audit.reload()
       return r
     },
+  }
+}
+
+// ───────────── admin: live activity monitor ─────────────
+export interface LiveActivityOptions {
+  windowHours?: number
+  /** Only show this user's events. */
+  userId?: string | null
+  /** Only show this event kind (e.g. 'reply'). */
+  kind?: string | null
+  maxEvents?: number
+}
+
+/**
+ * Who is online and what they are doing, updated in real time.
+ * Activity is metadata only: admins never see message text.
+ */
+export function useLiveActivity({ windowHours = 24, userId = null, kind = null, maxEvents = 200 }: LiveActivityOptions = {}) {
+  const [users, setUsers] = useState<LiveUser[]>([])
+  const [feed, setFeed] = useState<ActivityEvent[]>([])
+  const [stats, setStats] = useState<ActivityStats | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const [live, setLive] = useState(false)
+  const [tick, setTick] = useState(0)
+  const usersRef = useRef(users)
+  useEffect(() => {
+    usersRef.current = users
+  }, [users])
+
+  // Initial load + whenever filters change.
+  useEffect(() => {
+    let alive = true
+    const since = new Date(Date.now() - windowHours * 3600_000)
+    Promise.all([adminApi.liveUsers(), adminApi.activityFeed({ since, userId, kind, limit: maxEvents }), adminApi.activityStats(since)])
+      .then(([u, f, st]) => {
+        if (!alive) return
+        setUsers(sortLiveUsers(u))
+        setFeed(f)
+        setStats(st)
+        setError(null)
+      })
+      .catch((e: unknown) => alive && setError(e instanceof Error ? e.message : String(e)))
+    return () => {
+      alive = false
+    }
+  }, [windowHours, userId, kind, maxEvents, tick])
+
+  // Realtime: new events stream into the feed, presence changes update the user list.
+  useEffect(() => {
+    if (!CLOUD_ENABLED) return
+    return subscribeActivity({
+      onStatus: setLive,
+      onEvent: (row) => {
+        if ((userId && row.user_id !== userId) || (kind && row.kind !== kind)) return
+        const u = usersRef.current.find((x) => x.user_id === row.user_id)
+        if (!u) setTick((t) => t + 1) // a new user appeared: reload the list
+        const event: ActivityEvent = {
+          ...row,
+          email: u?.email ?? null,
+          display_name: u?.display_name ?? null,
+          avatar_url: u?.avatar_url ?? null,
+        }
+        setFeed((f) => (f.some((e) => e.id === event.id) ? f : [event, ...f].slice(0, maxEvents)))
+        setUsers((prev) =>
+          prev.map((x) =>
+            x.user_id === row.user_id ? { ...x, last_event: row.kind, last_event_at: row.created_at, events_1h: x.events_1h + 1 } : x,
+          ),
+        )
+        setStats((st) => (st ? { ...st, by_kind: { ...st.by_kind, [row.kind]: (st.by_kind[row.kind] ?? 0) + 1 } } : st))
+      },
+      onPresence: (row) => setUsers((prev) => sortLiveUsers(applyPresence(prev, row))),
+    })
+  }, [userId, kind, maxEvents])
+
+  // Heartbeats stop when someone closes the app: age them out locally, refresh stats periodically.
+  useEffect(() => {
+    const expire = setInterval(() => setUsers((prev) => sortLiveUsers(expirePresence(prev))), 10_000)
+    const refresh = setInterval(() => setTick((t) => t + 1), 60_000)
+    return () => {
+      clearInterval(expire)
+      clearInterval(refresh)
+    }
+  }, [])
+
+  const online = users.filter((u) => u.online)
+  return {
+    /** All users, online first. */
+    users,
+    online,
+    /** Newest first. Use describeActivity(e.kind, e.meta) for a readable line. */
+    feed,
+    stats: stats ? { ...stats, online_now: online.length } : null,
+    /** true while the realtime connection is up. */
+    live,
+    error,
+    reload: () => setTick((t) => t + 1),
   }
 }

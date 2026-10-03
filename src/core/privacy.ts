@@ -13,12 +13,13 @@ export interface PurgeResult {
  */
 export async function purgeLocal(now = Date.now(), database: LocalDB = db): Promise<PurgeResult> {
   const cutoff = now - RETENTION_MS
-  return database.transaction('rw', database.conversations, database.messages, database.telemetry, async () => {
+  return database.transaction('rw', [database.conversations, database.messages, database.telemetry, database.activity], async () => {
     const messages = await database.messages.where('createdAt').below(cutoff).delete()
     const expired = await database.conversations.where('updatedAt').below(cutoff).primaryKeys()
     await database.messages.where('conversationId').anyOf(expired).delete()
     await database.conversations.bulkDelete(expired)
     const telemetry = await database.telemetry.where('createdAt').below(cutoff).delete()
+    await database.activity.where('createdAt').below(cutoff).delete()
     return { conversations: expired.length, messages, telemetry }
   })
 }
